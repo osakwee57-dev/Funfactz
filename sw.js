@@ -1,5 +1,5 @@
 
-const CACHE_NAME = 'funfactz-v3';
+const CACHE_NAME = 'funfactz-v5';
 const ASSETS = [
   '/',
   '/index.html',
@@ -7,60 +7,53 @@ const ASSETS = [
   '/App.tsx',
   '/constants.ts',
   '/types.ts',
-  '/manifest.json',
-  'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap'
+  '/manifest.json'
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
-  );
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)));
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    })
+    caches.keys().then((keys) => Promise.all(keys.map((k) => k !== CACHE_NAME && caches.delete(k))))
   );
   self.clients.claim();
 });
 
 self.addEventListener('fetch', (event) => {
   event.respondWith(
-    caches.match(event.request).then((response) => {
-      return response || fetch(event.request).catch(() => {
-        if (event.request.mode === 'navigate') {
-          return caches.match('/index.html');
+    caches.match(event.request).then((res) => res || fetch(event.request))
+  );
+});
+
+// Handle incoming notification interaction
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  
+  const factId = event.notification.data?.factId;
+  const targetUrl = event.notification.data?.url || '/';
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      // If a window is already open, focus it and redirect
+      for (const client of clientList) {
+        if (client.url.includes(self.location.origin)) {
+          return client.focus().then(c => c.navigate(targetUrl));
         }
-      });
+      }
+      // Otherwise open a new one
+      if (clients.openWindow) {
+        return clients.openWindow(targetUrl);
+      }
     })
   );
 });
 
-// Handle Notification Clicks to restore full-screen app state
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      if (clientList.length > 0) {
-        let client = clientList[0];
-        for (let i = 0; i < clientList.length; i++) {
-          if (clientList[i].focused) {
-            client = clientList[i];
-          }
-        }
-        return client.focus();
-      }
-      return clients.openWindow('/');
-    })
-  );
+// Listener for system-level re-scheduling if needed
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'sync-alarms') {
+    // This could be used for advanced re-syncing if the app is supported
+  }
 });
