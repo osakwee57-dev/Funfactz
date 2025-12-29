@@ -1,5 +1,5 @@
 
-const CACHE_NAME = 'funfactz-v5';
+const CACHE_NAME = 'funfactz-v6';
 const ASSETS = [
   '/',
   '/index.html',
@@ -28,22 +28,21 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Handle incoming notification interaction
+// Handle notification tap
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   
-  const factId = event.notification.data?.factId;
   const targetUrl = event.notification.data?.url || '/';
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      // If a window is already open, focus it and redirect
+      // Focus existing window and navigate to deep link
       for (const client of clientList) {
         if (client.url.includes(self.location.origin)) {
           return client.focus().then(c => c.navigate(targetUrl));
         }
       }
-      // Otherwise open a new one
+      // Or open a new standalone window
       if (clients.openWindow) {
         return clients.openWindow(targetUrl);
       }
@@ -51,9 +50,9 @@ self.addEventListener('notificationclick', (event) => {
   );
 });
 
-// Listener for system-level re-scheduling if needed
+// Experimental: Reschedule in background if system supports it
 self.addEventListener('periodicsync', (event) => {
   if (event.tag === 'sync-alarms') {
-    // This could be used for advanced re-syncing if the app is supported
+    // Background sync logic if needed
   }
 });
