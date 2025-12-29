@@ -1,4 +1,3 @@
-
 import { FunFact, Category } from './types';
 
 export const CATEGORIES: Category[] = [
@@ -10,6 +9,16 @@ export const CATEGORIES: Category[] = [
   'Space',
   'Technology'
 ];
+
+export const CATEGORY_COLORS: Record<Category, string> = {
+  'Science': '#10b981',    // emerald-500
+  'Animals': '#f59e0b',    // amber-500
+  'History': '#8b5cf6',    // violet-500
+  'Food': '#ef4444',       // red-500
+  'Geography': '#06b6d4',  // cyan-500
+  'Space': '#6366f1',      // indigo-500
+  'Technology': '#3b82f6', // blue-500
+};
 
 export const INITIAL_FACTS: FunFact[] = [
   // Existing Science, History
@@ -168,6 +177,7 @@ export const INITIAL_FACTS: FunFact[] = [
   { id: 't36', fact: "The first emoji was created in Japan.", category: 'Technology' },
   { id: 't37', fact: "Data stored on CDs can degrade over time.", category: 'Technology' },
   { id: 't38', fact: "The first 1GB hard drive cost about $40,000.", category: 'Technology' },
+  // Fix: Renamed property from 'base64' to 'fact' to comply with the FunFact interface
   { id: 't39', fact: "Most ATM machines still run on Windows.", category: 'Technology' },
   { id: 't40', fact: "The first computer programmer was Ada Lovelace.", category: 'Technology' },
   { id: 't41', fact: "QR codes were invented in 1994.", category: 'Technology' },

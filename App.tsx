@@ -1,11 +1,12 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { INITIAL_FACTS, CATEGORIES } from './constants.ts';
-import { FunFact, UserSettings, Screen, Category } from './types.ts';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { INITIAL_FACTS, CATEGORIES, CATEGORY_COLORS } from './constants.ts';
+import { FunFact, UserSettings, Screen, Category, FactNotification } from './types.ts';
 import { 
   Sparkles, Heart, Settings as SettingsIcon, 
   ChevronLeft, Trash2, Share2, 
-  Clock, LayoutGrid, Copy, CheckCircle2
+  Clock, LayoutGrid, Copy, CheckCircle2,
+  Plus, X, Bell
 } from 'lucide-react';
 
 const CATEGORY_ICONS: Record<Category, string> = {
@@ -33,16 +34,17 @@ const App: React.FC = () => {
     try {
       const saved = localStorage.getItem('funfactz_settings');
       const parsed = saved ? JSON.parse(saved) : null;
-      return parsed || {
-        notificationsEnabled: false,
-        notificationTime: '09:00',
+      if (parsed && Array.isArray(parsed.notifications)) {
+         return parsed;
+      }
+      return {
+        notifications: [{ id: 'default', time: '09:00', enabled: false }],
         darkMode: false,
         selectedCategories: CATEGORIES
       };
     } catch (e) {
       return {
-        notificationsEnabled: false,
-        notificationTime: '09:00',
+        notifications: [{ id: 'default', time: '09:00', enabled: false }],
         darkMode: false,
         selectedCategories: CATEGORIES
       };
@@ -52,8 +54,12 @@ const App: React.FC = () => {
   const [currentFact, setCurrentFact] = useState<FunFact | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showCopyToast, setShowCopyToast] = useState(false);
+  const [popupFact, setPopupFact] = useState<FunFact | null>(null);
+  
+  // Track last triggered notification to avoid multiple fires in one minute
+  const lastTriggeredRef = useRef<{ id: string, minute: number } | null>(null);
 
-  // Daily Fact Logic - Persists for 24 hours based on date seed
+  // Daily Fact Logic
   const dailyFact = useMemo(() => {
     const today = new Date();
     const dateSeed = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
@@ -76,6 +82,37 @@ const App: React.FC = () => {
     }
   }, [settings]);
 
+  // Background check for notifications
+  useEffect(() => {
+    const checkSchedule = () => {
+      const now = new Date();
+      const currentH = String(now.getHours()).padStart(2, '0');
+      const currentM = String(now.getMinutes()).padStart(2, '0');
+      const currentTimeStr = `${currentH}:${currentM}`;
+      const currentTotalMinutes = now.getHours() * 60 + now.getMinutes();
+
+      settings.notifications.forEach(notif => {
+        if (notif.enabled && notif.time === currentTimeStr) {
+          // Verify we haven't fired this exact schedule this minute
+          if (lastTriggeredRef.current?.id === notif.id && lastTriggeredRef.current?.minute === currentTotalMinutes) {
+            return;
+          }
+
+          // Trigger Pop-up
+          const filtered = INITIAL_FACTS.filter(f => settings.selectedCategories.includes(f.category));
+          const pool = filtered.length > 0 ? filtered : INITIAL_FACTS;
+          const randomFact = pool[Math.floor(Math.random() * pool.length)];
+          
+          setPopupFact(randomFact);
+          lastTriggeredRef.current = { id: notif.id, minute: currentTotalMinutes };
+        }
+      });
+    };
+
+    const interval = setInterval(checkSchedule, 10000); // Check every 10 seconds
+    return () => clearInterval(interval);
+  }, [settings.notifications, settings.selectedCategories]);
+
   const toggleFavorite = (fact: FunFact) => {
     const isFav = favorites.some(f => f.id === fact.id);
     if (isFav) {
@@ -92,8 +129,6 @@ const App: React.FC = () => {
     }
     
     setIsLoading(true);
-    
-    // Filter facts based on user preferences
     const filtered = INITIAL_FACTS.filter(f => settings.selectedCategories.includes(f.category));
     const pool = filtered.length > 0 ? filtered : INITIAL_FACTS;
     
@@ -125,9 +160,91 @@ const App: React.FC = () => {
 
   const isFactFavorite = (id: string) => favorites.some(f => f.id === id);
 
+  const addNotificationTime = () => {
+    const newId = Date.now().toString();
+    setSettings(s => ({
+      ...s,
+      notifications: [...s.notifications, { id: newId, time: '08:00', enabled: true }]
+    }));
+  };
+
+  const removeNotificationTime = (id: string) => {
+    setSettings(s => ({
+      ...s,
+      notifications: s.notifications.filter(n => n.id !== id)
+    }));
+  };
+
+  const toggleNotification = (id: string) => {
+    setSettings(s => ({
+      ...s,
+      notifications: s.notifications.map(n => n.id === id ? { ...n, enabled: !n.enabled } : n)
+    }));
+  };
+
+  const updateNotificationTime = (id: string, time: string) => {
+    setSettings(s => ({
+      ...s,
+      notifications: s.notifications.map(n => n.id === id ? { ...n, time } : n)
+    }));
+  };
+
   return (
-    <div className="min-h-screen w-full flex flex-col max-w-md mx-auto relative bg-[#f9fafb] dark:bg-[#09090b] text-zinc-900 dark:text-zinc-100 transition-colors duration-300">
+    <div className="min-h-screen w-full flex flex-col max-w-md mx-auto relative bg-[#f9fafb] dark:bg-[#09090b] text-zinc-900 dark:text-zinc-100 transition-colors duration-300 overflow-hidden">
       
+      {/* Fact Pop-Up Modal */}
+      {popupFact && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 backdrop-blur-2xl bg-black/60 animate-in fade-in duration-300">
+          <div className="w-full bg-white dark:bg-zinc-800 rounded-[40px] shadow-2xl relative overflow-hidden animate-in slide-in-from-bottom-12 duration-500 flex flex-col">
+            {/* Color Accent Bar */}
+            <div 
+              className="absolute left-0 top-0 bottom-0 w-2"
+              style={{ backgroundColor: CATEGORY_COLORS[popupFact.category] }}
+            />
+            
+            <div className="p-8 pb-4">
+              <div className="flex justify-between items-center mb-6">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl">{CATEGORY_ICONS[popupFact.category]}</span>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Scheduled Fact</span>
+                </div>
+                <button onClick={() => setPopupFact(null)} className="p-2 text-zinc-300 dark:text-zinc-600">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <span className="px-3 py-1 bg-zinc-50 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-300 text-[10px] font-black rounded-full uppercase tracking-widest">
+                  {popupFact.category}
+                </span>
+                <p className="text-2xl font-extrabold leading-tight text-zinc-800 dark:text-zinc-50">
+                  "{popupFact.fact}"
+                </p>
+              </div>
+            </div>
+
+            <div className="p-8 pt-4 space-y-3">
+              <button 
+                onClick={() => setPopupFact(null)}
+                className="w-full py-5 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 rounded-3xl font-black uppercase tracking-widest shadow-xl active:scale-95 transition-all"
+              >
+                Dismiss
+              </button>
+              <button 
+                onClick={() => {
+                  toggleFavorite(popupFact);
+                  setPopupFact(null);
+                }}
+                className="w-full py-4 flex items-center justify-center gap-2 text-emerald-500 font-bold uppercase text-xs tracking-widest"
+              >
+                <Heart size={16} fill={isFactFavorite(popupFact.id) ? "currentColor" : "none"} />
+                Save to Library
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toast Notification */}
       {showCopyToast && (
         <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[100] bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 px-4 py-2 rounded-full flex items-center gap-2 shadow-xl animate-in fade-in zoom-in duration-300">
@@ -316,7 +433,8 @@ const App: React.FC = () => {
           <div className="py-12 screen-transition">
             <h2 className="text-2xl font-black tracking-tight mb-10">App Settings</h2>
             
-            <div className="space-y-6">
+            <div className="space-y-10">
+              {/* Theme Settings */}
               <section className="bg-white dark:bg-zinc-800 p-8 rounded-[32px] shadow-sm space-y-8 border border-zinc-100 dark:border-zinc-700/30">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4">
@@ -332,41 +450,72 @@ const App: React.FC = () => {
                     <div className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow-lg transition-all ${settings.darkMode ? 'right-1' : 'left-1'}`} />
                   </button>
                 </div>
+              </section>
 
-                <div className="h-px bg-zinc-100 dark:bg-zinc-700/50" />
-
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 bg-amber-50 dark:bg-amber-900/20 text-amber-500 rounded-2xl flex items-center justify-center">
-                      <Clock size={20} />
-                    </div>
-                    <span className="font-black text-sm uppercase tracking-tighter">Daily Reminders</span>
+              {/* Multi-Time Notifications */}
+              <section className="space-y-6">
+                <div className="flex items-center justify-between px-2">
+                  <div className="flex flex-col">
+                    <h3 className="text-lg font-black tracking-tight">Fact Pop-Up Times</h3>
+                    <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">High priority reminders</p>
                   </div>
                   <button 
-                    onClick={() => setSettings(s => ({ ...s, notificationsEnabled: !s.notificationsEnabled }))}
-                    className={`w-14 h-8 rounded-full relative transition-all ${settings.notificationsEnabled ? 'bg-emerald-500' : 'bg-zinc-200'}`}
+                    onClick={addNotificationTime}
+                    disabled={settings.notifications.length >= 15}
+                    className="w-10 h-10 bg-emerald-500 text-white rounded-xl flex items-center justify-center shadow-lg active:scale-90 transition-all disabled:opacity-30"
                   >
-                    <div className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow-lg transition-all ${settings.notificationsEnabled ? 'right-1' : 'left-1'}`} />
+                    <Plus size={20} strokeWidth={3} />
                   </button>
                 </div>
 
-                {settings.notificationsEnabled && (
-                  <div className="flex items-center justify-between pt-2 animate-in slide-in-from-top-4 duration-500">
-                    <span className="text-[10px] text-zinc-400 font-black uppercase tracking-widest ml-14">Notify at</span>
-                    <input 
-                      type="time" 
-                      value={settings.notificationTime}
-                      onChange={(e) => setSettings(s => ({ ...s, notificationTime: e.target.value }))}
-                      className="bg-zinc-50 dark:bg-zinc-700 px-4 py-2 rounded-xl font-black text-sm outline-none focus:ring-2 focus:ring-emerald-500/30 border border-zinc-200 dark:border-zinc-600"
-                    />
-                  </div>
-                )}
+                <div className="space-y-3">
+                  {settings.notifications.map((notif) => (
+                    <div 
+                      key={notif.id} 
+                      className={`bg-white dark:bg-zinc-800 p-5 rounded-[28px] shadow-sm border transition-all flex items-center justify-between animate-in slide-in-from-right-4 duration-300 ${notif.enabled ? 'border-emerald-100 dark:border-emerald-900/30' : 'border-zinc-100 dark:border-zinc-700/30 opacity-60'}`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${notif.enabled ? 'bg-emerald-50 text-emerald-500' : 'bg-zinc-50 text-zinc-400'}`}>
+                          <Bell size={18} />
+                        </div>
+                        <input 
+                          type="time" 
+                          value={notif.time}
+                          onChange={(e) => updateNotificationTime(notif.id, e.target.value)}
+                          className="bg-zinc-50 dark:bg-zinc-700/50 px-3 py-1.5 rounded-xl font-black text-sm outline-none focus:ring-2 focus:ring-emerald-500/30 border border-transparent dark:text-zinc-100"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button 
+                          onClick={() => toggleNotification(notif.id)}
+                          className={`w-12 h-7 rounded-full relative transition-all ${notif.enabled ? 'bg-emerald-500' : 'bg-zinc-200 dark:bg-zinc-600'}`}
+                        >
+                          <div className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow-sm transition-all ${notif.enabled ? 'right-0.5' : 'left-0.5'}`} />
+                        </button>
+                        <button 
+                          onClick={() => removeNotificationTime(notif.id)}
+                          className="p-2 text-zinc-300 hover:text-rose-500 transition-colors"
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  
+                  {settings.notifications.length === 0 && (
+                    <div className="py-12 border-2 border-dashed border-zinc-100 dark:border-zinc-800 rounded-[32px] flex flex-col items-center justify-center text-zinc-300 gap-4">
+                      <Clock size={32} />
+                      <p className="text-[10px] font-black uppercase tracking-widest">No pop-ups scheduled</p>
+                    </div>
+                  )}
+                </div>
               </section>
               
-              <div className="text-center pt-12">
-                <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.2em] mb-2">FunFactz v6.1 Platinum Edition</p>
+              <div className="text-center pt-8">
+                <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.2em] mb-2">FunFactz v7.0 Premium</p>
                 <div className="inline-block px-3 py-1 bg-emerald-50 dark:bg-emerald-900/20 rounded-full border border-emerald-100 dark:border-emerald-900/30">
-                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-wider">Optimized Offline Delivery</p>
+                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-wider">High Frequency Scheduler Active</p>
                 </div>
               </div>
             </div>

@@ -8,9 +8,14 @@ export interface FunFact {
   isFavorite?: boolean;
 }
 
+export interface FactNotification {
+  id: string;
+  time: string; // HH:mm format
+  enabled: boolean;
+}
+
 export interface UserSettings {
-  notificationsEnabled: boolean;
-  notificationTime: string; // HH:mm format
+  notifications: FactNotification[];
   darkMode: boolean;
   selectedCategories: Category[];
 }
