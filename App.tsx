@@ -6,7 +6,7 @@ import {
   Sparkles, Heart, Settings as SettingsIcon, 
   ChevronLeft, Trash2, Share2, 
   Clock, LayoutGrid, Copy, CheckCircle2,
-  Plus, X, Bell
+  Plus, X, Bell, AlertTriangle
 } from 'lucide-react';
 
 const CATEGORY_ICONS: Record<Category, string> = {
@@ -35,18 +35,23 @@ const App: React.FC = () => {
       const saved = localStorage.getItem('funfactz_settings');
       const parsed = saved ? JSON.parse(saved) : null;
       if (parsed && Array.isArray(parsed.notifications)) {
-         return parsed;
+         return {
+           ...parsed,
+           seenFactIds: parsed.seenFactIds || []
+         };
       }
       return {
         notifications: [{ id: 'default', time: '09:00', enabled: false }],
         darkMode: false,
-        selectedCategories: CATEGORIES
+        selectedCategories: CATEGORIES,
+        seenFactIds: []
       };
     } catch (e) {
       return {
         notifications: [{ id: 'default', time: '09:00', enabled: false }],
         darkMode: false,
-        selectedCategories: CATEGORIES
+        selectedCategories: CATEGORIES,
+        seenFactIds: []
       };
     }
   });
@@ -54,17 +59,24 @@ const App: React.FC = () => {
   const [currentFact, setCurrentFact] = useState<FunFact | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showCopyToast, setShowCopyToast] = useState(false);
-  const [popupFact, setPopupFact] = useState<FunFact | null>(null);
+  const [alarmFact, setAlarmFact] = useState<FunFact | null>(null);
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>('default');
+
+  // Fix: Defined dailyFact using useMemo to solve "Cannot find name 'dailyFact'" errors
+  const dailyFact = useMemo(() => {
+    const today = new Date().toDateString();
+    const seed = today.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const filtered = INITIAL_FACTS.filter(f => settings.selectedCategories.includes(f.category));
+    const pool = filtered.length > 0 ? filtered : INITIAL_FACTS;
+    return pool[seed % pool.length];
+  }, [settings.selectedCategories]);
   
-  // Track last triggered notification to avoid multiple fires in one minute
   const lastTriggeredRef = useRef<{ id: string, minute: number } | null>(null);
 
-  // Daily Fact Logic
-  const dailyFact = useMemo(() => {
-    const today = new Date();
-    const dateSeed = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
-    const index = dateSeed % INITIAL_FACTS.length;
-    return INITIAL_FACTS[index];
+  useEffect(() => {
+    if ('Notification' in window) {
+      setNotifPermission(Notification.permission);
+    }
   }, []);
 
   useEffect(() => {
@@ -82,7 +94,33 @@ const App: React.FC = () => {
     }
   }, [settings]);
 
-  // Background check for notifications
+  // High Priority Notification & Alarm Trigger
+  const triggerAlarm = (fact: FunFact, notifId: string, minute: number) => {
+    setAlarmFact(fact);
+    setActiveTab('alarm');
+    lastTriggeredRef.current = { id: notifId, minute };
+
+    // Record that we've seen this fact to avoid repeats
+    setSettings(prev => ({
+      ...prev,
+      seenFactIds: Array.from(new Set([...prev.seenFactIds, fact.id])).slice(-50) // Keep last 50
+    }));
+
+    if (Notification.permission === 'granted') {
+      // Fix: Removed 'vibrate' property from NotificationOptions as it is not supported in the type definition
+      const n = new Notification("Time for a Fun Fact!", {
+        body: fact.fact,
+        icon: 'https://ui-avatars.com/api/?name=F+F&background=10b981&color=fff&size=128',
+        tag: 'fun-fact-alarm',
+        requireInteraction: true
+      });
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+    }
+  };
+
   useEffect(() => {
     const checkSchedule = () => {
       const now = new Date();
@@ -93,25 +131,34 @@ const App: React.FC = () => {
 
       settings.notifications.forEach(notif => {
         if (notif.enabled && notif.time === currentTimeStr) {
-          // Verify we haven't fired this exact schedule this minute
           if (lastTriggeredRef.current?.id === notif.id && lastTriggeredRef.current?.minute === currentTotalMinutes) {
             return;
           }
 
-          // Trigger Pop-up
-          const filtered = INITIAL_FACTS.filter(f => settings.selectedCategories.includes(f.category));
+          // Fact selection logic: filtered by category, avoid recently seen
+          const filtered = INITIAL_FACTS.filter(f => 
+            settings.selectedCategories.includes(f.category) && 
+            !settings.seenFactIds.includes(f.id)
+          );
+          
           const pool = filtered.length > 0 ? filtered : INITIAL_FACTS;
           const randomFact = pool[Math.floor(Math.random() * pool.length)];
           
-          setPopupFact(randomFact);
-          lastTriggeredRef.current = { id: notif.id, minute: currentTotalMinutes };
+          triggerAlarm(randomFact, notif.id, currentTotalMinutes);
         }
       });
     };
 
-    const interval = setInterval(checkSchedule, 10000); // Check every 10 seconds
+    const interval = setInterval(checkSchedule, 5000); // High frequency check
     return () => clearInterval(interval);
-  }, [settings.notifications, settings.selectedCategories]);
+  }, [settings.notifications, settings.selectedCategories, settings.seenFactIds]);
+
+  const requestPermission = async () => {
+    if ('Notification' in window) {
+      const permission = await Notification.requestPermission();
+      setNotifPermission(permission);
+    }
+  };
 
   const toggleFavorite = (fact: FunFact) => {
     const isFav = favorites.some(f => f.id === fact.id);
@@ -189,62 +236,54 @@ const App: React.FC = () => {
     }));
   };
 
+  // Alarm UI - Full Screen Intent Style
+  if (activeTab === 'alarm' && alarmFact) {
+    return (
+      <div className="fixed inset-0 z-[1000] bg-zinc-950 flex flex-col items-center justify-between p-12 text-center animate-in fade-in duration-500 overflow-hidden">
+        {/* Animated Background Pulse */}
+        <div className="absolute inset-0 overflow-hidden opacity-20 pointer-events-none">
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-emerald-500/20 rounded-full blur-[120px] animate-pulse" />
+        </div>
+
+        <div className="relative z-10 w-full space-y-12 mt-12">
+          <div className="flex flex-col items-center gap-4">
+            <div className="w-20 h-20 bg-emerald-500 rounded-[32px] flex items-center justify-center shadow-2xl shadow-emerald-500/40 animate-bounce">
+              <Sparkles size={40} className="text-white" />
+            </div>
+            <span className="text-emerald-500 font-black uppercase tracking-[0.4em] text-xs">FunFactz Alarm</span>
+          </div>
+
+          <div className="space-y-6">
+            <div 
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full border-2 border-white/10 bg-white/5 backdrop-blur-md"
+              style={{ color: CATEGORY_COLORS[alarmFact.category] }}
+            >
+              <span className="text-xl">{CATEGORY_ICONS[alarmFact.category]}</span>
+              <span className="font-black uppercase tracking-widest text-[10px]">{alarmFact.category}</span>
+            </div>
+            
+            <h2 className="text-3xl md:text-4xl font-extrabold text-white leading-tight pr-2">
+              "{alarmFact.fact}"
+            </h2>
+          </div>
+        </div>
+
+        <div className="relative z-10 w-full max-w-xs mb-12 space-y-4">
+          <button 
+            onClick={() => setActiveTab('home')}
+            className="w-full py-6 bg-white text-zinc-950 rounded-full font-black uppercase tracking-[0.2em] shadow-2xl active:scale-95 transition-all text-lg"
+          >
+            Dismiss
+          </button>
+          <p className="text-zinc-500 text-[10px] font-bold uppercase tracking-widest">Tap to return to your previous app</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen w-full flex flex-col max-w-md mx-auto relative bg-[#f9fafb] dark:bg-[#09090b] text-zinc-900 dark:text-zinc-100 transition-colors duration-300 overflow-hidden">
       
-      {/* Fact Pop-Up Modal */}
-      {popupFact && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 backdrop-blur-2xl bg-black/60 animate-in fade-in duration-300">
-          <div className="w-full bg-white dark:bg-zinc-800 rounded-[40px] shadow-2xl relative overflow-hidden animate-in slide-in-from-bottom-12 duration-500 flex flex-col">
-            {/* Color Accent Bar */}
-            <div 
-              className="absolute left-0 top-0 bottom-0 w-2"
-              style={{ backgroundColor: CATEGORY_COLORS[popupFact.category] }}
-            />
-            
-            <div className="p-8 pb-4">
-              <div className="flex justify-between items-center mb-6">
-                <div className="flex items-center gap-2">
-                  <span className="text-2xl">{CATEGORY_ICONS[popupFact.category]}</span>
-                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">Scheduled Fact</span>
-                </div>
-                <button onClick={() => setPopupFact(null)} className="p-2 text-zinc-300 dark:text-zinc-600">
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                <span className="px-3 py-1 bg-zinc-50 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-300 text-[10px] font-black rounded-full uppercase tracking-widest">
-                  {popupFact.category}
-                </span>
-                <p className="text-2xl font-extrabold leading-tight text-zinc-800 dark:text-zinc-50">
-                  "{popupFact.fact}"
-                </p>
-              </div>
-            </div>
-
-            <div className="p-8 pt-4 space-y-3">
-              <button 
-                onClick={() => setPopupFact(null)}
-                className="w-full py-5 bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 rounded-3xl font-black uppercase tracking-widest shadow-xl active:scale-95 transition-all"
-              >
-                Dismiss
-              </button>
-              <button 
-                onClick={() => {
-                  toggleFavorite(popupFact);
-                  setPopupFact(null);
-                }}
-                className="w-full py-4 flex items-center justify-center gap-2 text-emerald-500 font-bold uppercase text-xs tracking-widest"
-              >
-                <Heart size={16} fill={isFactFavorite(popupFact.id) ? "currentColor" : "none"} />
-                Save to Library
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Toast Notification */}
       {showCopyToast && (
         <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[100] bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 px-4 py-2 rounded-full flex items-center gap-2 shadow-xl animate-in fade-in zoom-in duration-300">
@@ -280,6 +319,25 @@ const App: React.FC = () => {
         {activeTab === 'home' && (
           <div className="py-6 screen-transition space-y-8">
             
+            {/* Notification Permission Banner */}
+            {notifPermission === 'default' && (
+              <div className="bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-900/30 p-4 rounded-3xl flex items-center gap-4 animate-in slide-in-from-top-2 duration-500">
+                <div className="w-10 h-10 bg-amber-400 rounded-xl flex items-center justify-center text-white">
+                  <Bell size={20} />
+                </div>
+                <div className="flex-1">
+                  <h4 className="text-xs font-black uppercase tracking-tight text-amber-900 dark:text-amber-100">Enable Pop-ups</h4>
+                  <p className="text-[10px] text-amber-700 dark:text-amber-400 font-bold">Get fun facts even when outside the app!</p>
+                </div>
+                <button 
+                  onClick={requestPermission}
+                  className="px-3 py-2 bg-amber-500 text-white text-[10px] font-black uppercase rounded-xl active:scale-95 transition-all"
+                >
+                  Allow
+                </button>
+              </div>
+            )}
+
             {/* Daily Fact Section */}
             {!currentFact && (
               <section className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-700">
@@ -434,6 +492,29 @@ const App: React.FC = () => {
             <h2 className="text-2xl font-black tracking-tight mb-10">App Settings</h2>
             
             <div className="space-y-10">
+              {/* Permissions & Status */}
+              <section className="bg-white dark:bg-zinc-800 p-8 rounded-[32px] shadow-sm space-y-4 border border-zinc-100 dark:border-zinc-700/30">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 bg-zinc-50 dark:bg-zinc-700/50 text-zinc-400 rounded-2xl flex items-center justify-center">
+                      <Bell size={20} />
+                    </div>
+                    <span className="font-black text-sm uppercase tracking-tighter">Pop-up Support</span>
+                  </div>
+                  <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${notifPermission === 'granted' ? 'bg-emerald-50 text-emerald-500' : 'bg-rose-50 text-rose-500'}`}>
+                    {notifPermission === 'granted' ? 'Enabled' : 'Disabled'}
+                  </div>
+                </div>
+                {notifPermission !== 'granted' && (
+                  <button 
+                    onClick={requestPermission}
+                    className="w-full py-3 bg-emerald-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg active:scale-95 transition-all"
+                  >
+                    Fix Permission
+                  </button>
+                )}
+              </section>
+
               {/* Theme Settings */}
               <section className="bg-white dark:bg-zinc-800 p-8 rounded-[32px] shadow-sm space-y-8 border border-zinc-100 dark:border-zinc-700/30">
                 <div className="flex items-center justify-between">
@@ -456,8 +537,8 @@ const App: React.FC = () => {
               <section className="space-y-6">
                 <div className="flex items-center justify-between px-2">
                   <div className="flex flex-col">
-                    <h3 className="text-lg font-black tracking-tight">Fact Pop-Up Times</h3>
-                    <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">High priority reminders</p>
+                    <h3 className="text-lg font-black tracking-tight">Full-Screen Alarm Times</h3>
+                    <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Automatic Pop-up Fact Reminders</p>
                   </div>
                   <button 
                     onClick={addNotificationTime}
@@ -476,7 +557,7 @@ const App: React.FC = () => {
                     >
                       <div className="flex items-center gap-4">
                         <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${notif.enabled ? 'bg-emerald-50 text-emerald-500' : 'bg-zinc-50 text-zinc-400'}`}>
-                          <Bell size={18} />
+                          <Clock size={18} />
                         </div>
                         <input 
                           type="time" 
@@ -506,16 +587,16 @@ const App: React.FC = () => {
                   {settings.notifications.length === 0 && (
                     <div className="py-12 border-2 border-dashed border-zinc-100 dark:border-zinc-800 rounded-[32px] flex flex-col items-center justify-center text-zinc-300 gap-4">
                       <Clock size={32} />
-                      <p className="text-[10px] font-black uppercase tracking-widest">No pop-ups scheduled</p>
+                      <p className="text-[10px] font-black uppercase tracking-widest">No alarms scheduled</p>
                     </div>
                   )}
                 </div>
               </section>
               
               <div className="text-center pt-8">
-                <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.2em] mb-2">FunFactz v7.0 Premium</p>
+                <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.2em] mb-2">FunFactz v8.0 System Alarm</p>
                 <div className="inline-block px-3 py-1 bg-emerald-50 dark:bg-emerald-900/20 rounded-full border border-emerald-100 dark:border-emerald-900/30">
-                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-wider">High Frequency Scheduler Active</p>
+                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-wider">Alarm Intents Ready</p>
                 </div>
               </div>
             </div>

@@ -18,6 +18,7 @@ export interface UserSettings {
   notifications: FactNotification[];
   darkMode: boolean;
   selectedCategories: Category[];
+  seenFactIds: string[];
 }
 
-export type Screen = 'home' | 'categories' | 'favorites' | 'settings';
+export type Screen = 'home' | 'categories' | 'favorites' | 'settings' | 'alarm';
