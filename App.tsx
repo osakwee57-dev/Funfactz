@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { INITIAL_FACTS, CATEGORIES } from './constants';
-import { FunFact, UserSettings, Screen, Category } from './types';
+import { INITIAL_FACTS, CATEGORIES } from './constants.ts';
+import { FunFact, UserSettings, Screen, Category } from './types.ts';
 import { 
   Sparkles, Heart, Settings as SettingsIcon, 
   ChevronLeft, Trash2, Share2, 
@@ -21,18 +21,32 @@ const CATEGORY_ICONS: Record<Category, string> = {
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Screen>('home');
   const [favorites, setFavorites] = useState<FunFact[]>(() => {
-    const saved = localStorage.getItem('funfactz_favs');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('funfactz_favs');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
   });
 
   const [settings, setSettings] = useState<UserSettings>(() => {
-    const saved = localStorage.getItem('funfactz_settings');
-    return saved ? JSON.parse(saved) : {
-      notificationsEnabled: false,
-      notificationTime: '09:00',
-      darkMode: false,
-      selectedCategories: CATEGORIES
-    };
+    try {
+      const saved = localStorage.getItem('funfactz_settings');
+      const parsed = saved ? JSON.parse(saved) : null;
+      return parsed || {
+        notificationsEnabled: false,
+        notificationTime: '09:00',
+        darkMode: false,
+        selectedCategories: CATEGORIES
+      };
+    } catch (e) {
+      return {
+        notificationsEnabled: false,
+        notificationTime: '09:00',
+        darkMode: false,
+        selectedCategories: CATEGORIES
+      };
+    }
   });
 
   const [currentFact, setCurrentFact] = useState<FunFact | null>(null);
@@ -60,7 +74,7 @@ const App: React.FC = () => {
       document.documentElement.classList.remove('dark');
       document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#10b981');
     }
-  }, [settings.darkMode]);
+  }, [settings]);
 
   const toggleFavorite = (fact: FunFact) => {
     const isFav = favorites.some(f => f.id === fact.id);
@@ -83,10 +97,8 @@ const App: React.FC = () => {
     const filtered = INITIAL_FACTS.filter(f => settings.selectedCategories.includes(f.category));
     const pool = filtered.length > 0 ? filtered : INITIAL_FACTS;
     
-    // Short delay for "vibrancy" and feel
     setTimeout(() => {
       let randomFact = pool[Math.floor(Math.random() * pool.length)];
-      // Try to avoid showing the same fact twice in a row
       if (currentFact && randomFact.id === currentFact.id && pool.length > 1) {
         randomFact = pool.find(f => f.id !== currentFact.id) || randomFact;
       }
@@ -120,7 +132,7 @@ const App: React.FC = () => {
       {showCopyToast && (
         <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[100] bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 px-4 py-2 rounded-full flex items-center gap-2 shadow-xl animate-in fade-in zoom-in duration-300">
           <CheckCircle2 size={16} className="text-emerald-500" />
-          <span className="text-sm font-bold">Copied to clipboard!</span>
+          <span className="text-sm font-bold">Copied!</span>
         </div>
       )}
 
@@ -153,13 +165,13 @@ const App: React.FC = () => {
             
             {/* Daily Fact Section */}
             {!currentFact && (
-              <section className="space-y-4">
+              <section className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-700">
                 <div className="flex items-center gap-2 mb-1">
                   <div className="daily-badge px-2 py-0.5 rounded text-[10px] font-black text-white uppercase tracking-widest">Daily Pick</div>
                   <span className="text-xs font-bold text-zinc-400 uppercase tracking-tighter">{new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}</span>
                 </div>
-                <div className="w-full bg-white dark:bg-zinc-800 rounded-3xl p-6 fact-card-shadow border border-zinc-50 dark:border-zinc-700/30 relative group">
-                  <div className="absolute top-4 right-4 text-2xl opacity-20">{CATEGORY_ICONS[dailyFact.category]}</div>
+                <div className="w-full bg-white dark:bg-zinc-800 rounded-3xl p-6 fact-card-shadow border border-zinc-50 dark:border-zinc-700/30 relative overflow-hidden group">
+                  <div className="absolute top-4 right-4 text-2xl opacity-10">{CATEGORY_ICONS[dailyFact.category]}</div>
                   <p className="text-lg font-bold leading-tight mb-4 pr-6">
                     "{dailyFact.fact}"
                   </p>
@@ -179,13 +191,13 @@ const App: React.FC = () => {
             {/* Main Fact Card */}
             <div className="w-full min-h-[340px] flex items-center justify-center">
               {!currentFact && !isLoading ? (
-                <div className="text-center p-8 bg-zinc-50 dark:bg-zinc-900/50 rounded-[40px] border-2 border-dashed border-zinc-200 dark:border-zinc-800 w-full flex flex-col items-center">
-                  <div className="text-6xl mb-6 animate-bounce">💡</div>
+                <div className="text-center p-12 bg-zinc-50 dark:bg-zinc-900/50 rounded-[48px] border-2 border-dashed border-zinc-200 dark:border-zinc-800 w-full flex flex-col items-center animate-in zoom-in duration-500">
+                  <div className="text-6xl mb-6">💡</div>
                   <h2 className="text-xl font-black mb-2">Curious today?</h2>
-                  <p className="text-zinc-500 text-sm font-medium">Over 200+ facts ready for you!</p>
+                  <p className="text-zinc-500 text-sm font-medium">Click the button below to start your journey through amazing facts!</p>
                 </div>
               ) : (
-                <div className={`w-full bg-white dark:bg-zinc-800 rounded-[32px] p-8 fact-card-shadow relative border border-emerald-100 dark:border-emerald-900/20 transition-all ${isLoading ? 'scale-95 opacity-50 grayscale' : 'scale-100 opacity-100'}`}>
+                <div className={`w-full bg-white dark:bg-zinc-800 rounded-[32px] p-8 fact-card-shadow relative border border-emerald-100 dark:border-emerald-900/20 transition-all duration-300 ${isLoading ? 'scale-95 opacity-50 grayscale' : 'scale-100 opacity-100'}`}>
                   <div className="flex justify-between items-start mb-8">
                     <span className="px-3 py-1 bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 text-[10px] font-black rounded-full uppercase tracking-widest border border-amber-100 dark:border-amber-900/30">
                       {currentFact && CATEGORY_ICONS[currentFact.category]} {currentFact?.category}
@@ -219,14 +231,16 @@ const App: React.FC = () => {
             </div>
 
             {/* Generator Button */}
-            <button
-              onClick={generateFact}
-              disabled={isLoading}
-              className={`w-full h-16 gradient-btn text-white rounded-2xl text-lg font-black shadow-xl shadow-emerald-500/20 active:scale-95 transition-all flex items-center justify-center gap-3 disabled:opacity-50 uppercase tracking-widest`}
-            >
-              <Sparkles size={20} className={isLoading ? "animate-spin" : ""} />
-              {isLoading ? "Generating..." : "Get a Fun Fact!"}
-            </button>
+            <div className="px-2">
+              <button
+                onClick={generateFact}
+                disabled={isLoading}
+                className={`w-full h-20 gradient-btn text-white rounded-3xl text-xl font-black shadow-xl shadow-emerald-500/20 active:scale-95 transition-all flex items-center justify-center gap-4 disabled:opacity-50 uppercase tracking-widest ${!currentFact && !isLoading ? 'btn-pulse' : ''}`}
+              >
+                <Sparkles size={24} className={isLoading ? "animate-spin" : ""} />
+                {isLoading ? "Thinking..." : "Get a Fun Fact!"}
+              </button>
+            </div>
           </div>
         )}
 
@@ -236,9 +250,9 @@ const App: React.FC = () => {
               <button onClick={() => setActiveTab('home')} className="p-2.5 bg-white dark:bg-zinc-800 rounded-xl shadow-sm active:scale-90 transition-all border border-zinc-100 dark:border-zinc-700/50">
                 <ChevronLeft size={20}/>
               </button>
-              <h2 className="text-2xl font-black tracking-tight">Topics</h2>
+              <h2 className="text-2xl font-black tracking-tight">Explore Topics</h2>
             </div>
-            <p className="text-xs text-zinc-400 mb-6 font-black uppercase tracking-widest">Personalize your feed:</p>
+            <p className="text-xs text-zinc-400 mb-6 font-black uppercase tracking-widest">Selected categories will appear in your feed:</p>
             <div className="grid grid-cols-2 gap-4">
               {CATEGORIES.map(cat => {
                 const isSelected = settings.selectedCategories.includes(cat);
@@ -253,12 +267,12 @@ const App: React.FC = () => {
                     }))}
                     className={`p-6 rounded-3xl flex flex-col items-center gap-4 border-2 transition-all active:scale-95 ${
                       isSelected 
-                        ? 'border-amber-400 bg-amber-50 dark:bg-amber-900/10' 
+                        ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-900/10' 
                         : 'border-white dark:border-zinc-800 bg-white dark:bg-zinc-800 shadow-sm opacity-60'
                     }`}
                   >
                     <span className={`text-4xl transition-transform ${isSelected ? 'scale-110' : 'scale-100'}`}>{CATEGORY_ICONS[cat]}</span>
-                    <span className={`text-xs font-black uppercase tracking-tighter ${isSelected ? 'text-amber-600 dark:text-amber-400' : 'text-zinc-500'}`}>{cat}</span>
+                    <span className={`text-xs font-black uppercase tracking-tighter ${isSelected ? 'text-emerald-700 dark:text-emerald-400' : 'text-zinc-500'}`}>{cat}</span>
                   </button>
                 );
               })}
@@ -268,26 +282,26 @@ const App: React.FC = () => {
 
         {activeTab === 'favorites' && (
           <div className="py-12 screen-transition">
-            <h2 className="text-2xl font-black tracking-tight mb-8">Saved Gems</h2>
+            <h2 className="text-2xl font-black tracking-tight mb-8">Your Collection</h2>
             {favorites.length === 0 ? (
               <div className="py-24 text-center flex flex-col items-center">
                 <div className="w-24 h-24 bg-zinc-100 dark:bg-zinc-800 rounded-[40px] flex items-center justify-center mb-8 border border-zinc-200 dark:border-zinc-700/50">
                   <Heart size={40} className="text-zinc-300" />
                 </div>
-                <p className="text-zinc-400 font-bold uppercase tracking-widest text-xs">Your library is empty</p>
+                <p className="text-zinc-400 font-bold uppercase tracking-widest text-xs">Nothing saved yet</p>
                 <button onClick={() => setActiveTab('home')} className="mt-6 text-emerald-500 font-black flex items-center gap-2 active:scale-95 transition-all">
-                  Start Exploring <Sparkles size={16} />
+                  Browse Facts <Sparkles size={16} />
                 </button>
               </div>
             ) : (
               <div className="space-y-4">
                 {favorites.map(fav => (
-                  <div key={fav.id} className="bg-white dark:bg-zinc-800 p-6 rounded-3xl shadow-sm border border-zinc-100 dark:border-zinc-700/30 group">
+                  <div key={fav.id} className="bg-white dark:bg-zinc-800 p-6 rounded-3xl shadow-sm border border-zinc-100 dark:border-zinc-700/30">
                     <div className="flex justify-between items-center mb-4">
                       <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1 rounded uppercase tracking-widest">{fav.category}</span>
                       <div className="flex gap-2">
-                        <button onClick={() => shareFact(fav)} className="p-2 text-zinc-300 hover:text-zinc-500"><Share2 size={16}/></button>
-                        <button onClick={() => toggleFavorite(fav)} className="p-2 text-rose-400 hover:text-rose-600"><Trash2 size={16}/></button>
+                        <button onClick={() => shareFact(fav)} className="p-2 text-zinc-300 active:text-emerald-500"><Share2 size={16}/></button>
+                        <button onClick={() => toggleFavorite(fav)} className="p-2 text-rose-400 active:text-rose-600"><Trash2 size={16}/></button>
                       </div>
                     </div>
                     <p className="text-zinc-800 dark:text-zinc-200 leading-relaxed font-bold italic">"{fav.fact}"</p>
@@ -300,7 +314,7 @@ const App: React.FC = () => {
 
         {activeTab === 'settings' && (
           <div className="py-12 screen-transition">
-            <h2 className="text-2xl font-black tracking-tight mb-10">Settings</h2>
+            <h2 className="text-2xl font-black tracking-tight mb-10">App Settings</h2>
             
             <div className="space-y-6">
               <section className="bg-white dark:bg-zinc-800 p-8 rounded-[32px] shadow-sm space-y-8 border border-zinc-100 dark:border-zinc-700/30">
@@ -309,7 +323,7 @@ const App: React.FC = () => {
                     <div className="w-10 h-10 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-500 rounded-2xl flex items-center justify-center">
                       <Sparkles size={20} />
                     </div>
-                    <span className="font-black text-sm uppercase tracking-tighter">Dark Appearance</span>
+                    <span className="font-black text-sm uppercase tracking-tighter">Dark Mode</span>
                   </div>
                   <button 
                     onClick={() => setSettings(s => ({ ...s, darkMode: !s.darkMode }))}
@@ -326,7 +340,7 @@ const App: React.FC = () => {
                     <div className="w-10 h-10 bg-amber-50 dark:bg-amber-900/20 text-amber-500 rounded-2xl flex items-center justify-center">
                       <Clock size={20} />
                     </div>
-                    <span className="font-black text-sm uppercase tracking-tighter">Smart Reminders</span>
+                    <span className="font-black text-sm uppercase tracking-tighter">Daily Reminders</span>
                   </div>
                   <button 
                     onClick={() => setSettings(s => ({ ...s, notificationsEnabled: !s.notificationsEnabled }))}
@@ -350,9 +364,9 @@ const App: React.FC = () => {
               </section>
               
               <div className="text-center pt-12">
-                <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.2em] mb-2">FunFactz v6.0 Platinum</p>
+                <p className="text-[10px] text-zinc-400 font-black uppercase tracking-[0.2em] mb-2">FunFactz v6.1 Platinum Edition</p>
                 <div className="inline-block px-3 py-1 bg-emerald-50 dark:bg-emerald-900/20 rounded-full border border-emerald-100 dark:border-emerald-900/30">
-                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-wider">Verified Offline Mode</p>
+                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-wider">Optimized Offline Delivery</p>
                 </div>
               </div>
             </div>
@@ -364,9 +378,9 @@ const App: React.FC = () => {
       <nav className="fixed bottom-0 left-0 right-0 h-24 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border-t border-zinc-100 dark:border-zinc-800 px-8 flex justify-between items-center z-50">
         {[
           { id: 'home', icon: Sparkles, label: 'Discover' },
-          { id: 'categories', icon: LayoutGrid, label: 'Feed' },
+          { id: 'categories', icon: LayoutGrid, label: 'Topics' },
           { id: 'favorites', icon: Heart, label: 'Library' },
-          { id: 'settings', icon: SettingsIcon, label: 'More' },
+          { id: 'settings', icon: SettingsIcon, label: 'Settings' },
         ].map(({ id, icon: Icon, label }) => {
           const isActive = activeTab === id;
           return (
