@@ -1,5 +1,5 @@
 
-const CACHE_NAME = 'funfactz-v7';
+const CACHE_NAME = 'funfactz-v8';
 const ASSETS = [
   '/',
   '/index.html',
@@ -28,6 +28,44 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
+// Timer Map to keep track of active background alarms
+const activeTimers = new Map();
+
+// Listen for messages from the main app thread
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SCHEDULE_ALARM') {
+    const { fact, delayMs, id, url, category } = event.data;
+    
+    // Clear any existing timer for this specific alarm ID
+    if (activeTimers.has(id)) {
+      clearTimeout(activeTimers.get(id));
+    }
+
+    // Use event.waitUntil to extend the Service Worker's life
+    event.waitUntil(new Promise((resolve) => {
+      const timerId = setTimeout(async () => {
+        try {
+          await self.registration.showNotification(`FunFact: ${category} 💡`, {
+            body: fact,
+            tag: `funfact-alarm-${id}`,
+            icon: 'https://ui-avatars.com/api/?name=F+F&background=10b981&color=fff&size=128',
+            badge: 'https://ui-avatars.com/api/?name=FF&background=10b981&color=fff&size=96',
+            data: { url },
+            requireInteraction: true,
+            vibrate: [200, 100, 200]
+          });
+        } catch (err) {
+          console.error('Failed to show background notification:', err);
+        }
+        activeTimers.delete(id);
+        resolve();
+      }, delayMs);
+      
+      activeTimers.set(id, timerId);
+    }));
+  }
+});
+
 // Handle notification tap (The "WhatsApp" style tap-to-open)
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
@@ -51,11 +89,4 @@ self.addEventListener('notificationclick', (event) => {
       }
     })
   );
-});
-
-// Reschedule in background if system supports it
-self.addEventListener('periodicsync', (event) => {
-  if (event.tag === 'sync-alarms') {
-    // This allows the app to refresh schedules in the background periodically
-  }
 });

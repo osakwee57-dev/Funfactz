@@ -91,24 +91,19 @@ const App: React.FC = () => {
   }, []);
 
   // FOREGROUND FALLBACK ENGINE
-  // This runs while the app is open to catch alarms if System Triggers aren't supported
   useEffect(() => {
     const timer = setInterval(() => {
       const now = new Date();
       const currentTimeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
       
-      // Only check if time has changed and we have enabled notifications
       if (currentTimeString !== lastAlarmCheckRef.current) {
         lastAlarmCheckRef.current = currentTimeString;
-        
         const matchingAlarm = settings.notifications.find(n => n.enabled && n.time === currentTimeString);
-        
-        // If we found an alarm and System Triggers aren't handling background tasks
         if (matchingAlarm && !supportsTriggers) {
           fireImmediateNotification();
         }
       }
-    }, 30000); // Check every 30 seconds
+    }, 30000);
 
     return () => clearInterval(timer);
   }, [settings.notifications, supportsTriggers]);
@@ -121,7 +116,6 @@ const App: React.FC = () => {
     const factPool = filteredFacts.length > 0 ? filteredFacts : INITIAL_FACTS;
     const randomFact = factToUse || factPool[Math.floor(Math.random() * factPool.length)];
 
-    // Fix: Added 'as any' to the options object to allow the 'vibrate' property which may be missing from standard NotificationOptions types
     reg.showNotification(`FunFact: ${randomFact.category} 💡`, {
       body: randomFact.fact,
       tag: `funfact-instant-${Date.now()}`,
@@ -135,21 +129,15 @@ const App: React.FC = () => {
     } as any);
   };
 
-  // SYSTEM ALARM SCHEDULING ENGINE (The "WhatsApp" Background Flow)
+  // HYBRID ALARM SCHEDULING ENGINE
   const syncSystemAlarms = useCallback(async (currentSettings: UserSettings) => {
-    if (!('serviceWorker' in navigator) || !supportsTriggers) return;
+    if (!('serviceWorker' in navigator)) return;
     if (Notification.permission !== 'granted') return;
 
     setIsScheduling(true);
     const reg = await navigator.serviceWorker.ready;
+    const controller = navigator.serviceWorker.controller;
     
-    // Clear old tags
-    const existing = await reg.getNotifications();
-    existing.forEach(n => {
-      // @ts-ignore
-      if (n.tag && n.tag.startsWith('funfact-alarm-')) n.close();
-    });
-
     const activeNotifications = currentSettings.notifications.filter(n => n.enabled);
     if (activeNotifications.length === 0) {
       setIsScheduling(false);
@@ -159,36 +147,53 @@ const App: React.FC = () => {
     const filteredFacts = INITIAL_FACTS.filter(f => currentSettings.selectedCategories.includes(f.category));
     const factPool = filteredFacts.length > 0 ? filteredFacts : INITIAL_FACTS;
 
-    for (let day = 0; day < 3; day++) { // Reduced to 3 days to keep schedule lean
-      for (const config of activeNotifications) {
-        const [hours, minutes] = config.time.split(':').map(Number);
-        const triggerDate = new Date();
-        triggerDate.setDate(triggerDate.getDate() + day);
-        triggerDate.setHours(hours, minutes, 0, 0);
+    for (const config of activeNotifications) {
+      const [hours, minutes] = config.time.split(':').map(Number);
+      const triggerDate = new Date();
+      triggerDate.setHours(hours, minutes, 0, 0);
 
-        if (triggerDate.getTime() < Date.now()) continue;
+      // If the time has passed today, schedule for tomorrow
+      if (triggerDate.getTime() < Date.now()) {
+        triggerDate.setDate(triggerDate.getDate() + 1);
+      }
 
-        const randomFact = factPool[Math.floor(Math.random() * factPool.length)];
+      const delayMs = triggerDate.getTime() - Date.now();
+      const randomFact = factPool[Math.floor(Math.random() * factPool.length)];
+      const alarmUrl = `${window.location.origin}?mode=alarm&factId=${randomFact.id}`;
 
+      // Strategy A: Notification Triggers (Experimental, Best Performance)
+      if (supportsTriggers) {
         try {
           // @ts-ignore
           const trigger = new TimestampTrigger(triggerDate.getTime());
           await reg.showNotification(`FunFact: ${randomFact.category} 💡`, {
             body: randomFact.fact,
-            tag: `funfact-alarm-${config.id}-${day}`,
+            tag: `funfact-alarm-${config.id}`,
             icon: 'https://ui-avatars.com/api/?name=F+F&background=10b981&color=fff&size=128',
             // @ts-ignore
             showTrigger: trigger,
             data: { 
               factId: randomFact.id,
-              url: `${window.location.origin}?mode=alarm&factId=${randomFact.id}`
+              url: alarmUrl
             },
             requireInteraction: true,
             vibrate: [200, 100, 200]
           } as any);
         } catch (e) {
-          console.error('Trigger fail', e);
+          console.debug('Triggers failed, falling back to Service Worker messages');
         }
+      }
+
+      // Strategy B: Service Worker Message Scheduling (Robust Fallback)
+      if (controller) {
+        controller.postMessage({
+          type: 'SCHEDULE_ALARM',
+          id: config.id,
+          fact: randomFact.fact,
+          category: randomFact.category,
+          delayMs: delayMs,
+          url: alarmUrl
+        });
       }
     }
     setIsScheduling(false);
@@ -259,7 +264,7 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-white dark:bg-zinc-900 rounded-[48px] p-10 fact-card-shadow border border-white/5 relative overflow-hidden">
+          <div className="bg-white dark:bg-zinc-900 rounded-[48px] p-10 fact-card-shadow border border-white/5 relative overflow-hidden text-left">
              <div className="absolute -top-10 -right-10 text-[140px] opacity-5 pointer-events-none select-none">
                 {CATEGORY_ICONS[alarmFact.category]}
              </div>
@@ -267,7 +272,7 @@ const App: React.FC = () => {
                 <span>{CATEGORY_ICONS[alarmFact.category]}</span>
                 <span>{alarmFact.category} Fact</span>
              </div>
-             <p className="text-3xl md:text-4xl font-black leading-tight text-zinc-800 dark:text-zinc-50 italic">
+             <p className="text-2xl md:text-3xl font-black leading-tight text-zinc-800 dark:text-zinc-50 italic">
                 "{alarmFact.fact}"
              </p>
           </div>
@@ -459,9 +464,6 @@ const App: React.FC = () => {
                      <div className={`w-2 h-2 rounded-full ${isScheduling ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
                      <span className="text-[9px] font-black uppercase text-zinc-400">{isScheduling ? 'Syncing' : 'Live'}</span>
                    </div>
-                   <span className={`text-[8px] font-bold uppercase tracking-widest ${supportsTriggers ? 'text-emerald-500' : 'text-amber-500'}`}>
-                     {supportsTriggers ? 'Trigger API Ready' : 'Foreground Mode Only'}
-                   </span>
                 </div>
               </div>
 
@@ -469,9 +471,7 @@ const App: React.FC = () => {
                 <div className="flex items-start gap-4">
                   <Info size={18} className="text-emerald-500 mt-0.5 shrink-0" />
                   <p className="text-[9px] text-zinc-500 font-bold leading-relaxed uppercase tracking-wider">
-                    {supportsTriggers 
-                      ? "Fully Optimized: Facts will pop up even if the app is closed." 
-                      : "Limited Support: Keep the app open or in your recent apps for alarms to fire reliably."}
+                    Our background engine works even when the app is closed. If alarms don't fire, ensure your phone doesn't have "Low Power Mode" active.
                   </p>
                 </div>
                 <button 
