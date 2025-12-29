@@ -1,5 +1,5 @@
 
-const CACHE_NAME = 'funfactz-v6';
+const CACHE_NAME = 'funfactz-v7';
 const ASSETS = [
   '/',
   '/index.html',
@@ -28,7 +28,7 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Handle notification tap
+// Handle notification tap (The "WhatsApp" style tap-to-open)
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   
@@ -36,13 +36,16 @@ self.addEventListener('notificationclick', (event) => {
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      // Focus existing window and navigate to deep link
+      // 1. Try to find an existing window of the app and focus it
       for (const client of clientList) {
-        if (client.url.includes(self.location.origin)) {
-          return client.focus().then(c => c.navigate(targetUrl));
+        if (client.url.includes(self.location.origin) && 'focus' in client) {
+          return client.focus().then((focusedClient) => {
+            // Navigate the focused client to the deep link
+            return focusedClient.navigate(targetUrl);
+          });
         }
       }
-      // Or open a new standalone window
+      // 2. If no window is open, open a new one with the deep link
       if (clients.openWindow) {
         return clients.openWindow(targetUrl);
       }
@@ -50,9 +53,9 @@ self.addEventListener('notificationclick', (event) => {
   );
 });
 
-// Experimental: Reschedule in background if system supports it
+// Reschedule in background if system supports it
 self.addEventListener('periodicsync', (event) => {
   if (event.tag === 'sync-alarms') {
-    // Background sync logic if needed
+    // This allows the app to refresh schedules in the background periodically
   }
 });

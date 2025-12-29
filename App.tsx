@@ -1,12 +1,12 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { INITIAL_FACTS, CATEGORIES } from './constants.ts';
 import { FunFact, UserSettings, Screen, Category } from './types.ts';
 import { 
   Sparkles, Heart, Settings as SettingsIcon, 
   ChevronLeft, Trash2, Share2, 
   Clock, LayoutGrid, Copy, CheckCircle2,
-  Plus, Bell, Activity, Info, X
+  Plus, Bell, Activity, Info, X, Zap, AlertCircle
 } from 'lucide-react';
 
 const CATEGORY_ICONS: Record<Category, string> = {
@@ -57,46 +57,96 @@ const App: React.FC = () => {
   const [alarmFact, setAlarmFact] = useState<FunFact | null>(null);
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>('default');
   const [isScheduling, setIsScheduling] = useState(false);
+  const [supportsTriggers, setSupportsTriggers] = useState<boolean>(false);
+  
+  const lastAlarmCheckRef = useRef<string>('');
 
-  // Load alarm fact from URL if arriving via notification
+  // Check for Deep Links and System Support
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const factId = urlParams.get('factId');
-    if (factId) {
-      const fact = INITIAL_FACTS.find(f => f.id === factId);
-      if (fact) {
-        setAlarmFact(fact);
-        setActiveTab('alarm');
+    const checkSupport = () => {
+      setSupportsTriggers('showTrigger' in Notification.prototype || 'showTrigger' in ServiceWorkerRegistration.prototype);
+      if ('Notification' in window) setNotifPermission(Notification.permission);
+    };
+
+    const handleDeepLink = () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const mode = urlParams.get('mode');
+      const factId = urlParams.get('factId');
+      if (mode === 'alarm' && factId) {
+        const fact = INITIAL_FACTS.find(f => f.id === factId);
+        if (fact) {
+          setAlarmFact(fact);
+          setActiveTab('alarm');
+        }
       }
-    }
+    };
+
+    checkSupport();
+    handleDeepLink();
+    window.addEventListener('popstate', handleDeepLink);
+    window.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') checkSupport();
+    });
+    return () => window.removeEventListener('popstate', handleDeepLink);
   }, []);
 
+  // FOREGROUND FALLBACK ENGINE
+  // This runs while the app is open to catch alarms if System Triggers aren't supported
   useEffect(() => {
-    if ('Notification' in window) {
-      setNotifPermission(Notification.permission);
-    }
-  }, []);
+    const timer = setInterval(() => {
+      const now = new Date();
+      const currentTimeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+      
+      // Only check if time has changed and we have enabled notifications
+      if (currentTimeString !== lastAlarmCheckRef.current) {
+        lastAlarmCheckRef.current = currentTimeString;
+        
+        const matchingAlarm = settings.notifications.find(n => n.enabled && n.time === currentTimeString);
+        
+        // If we found an alarm and System Triggers aren't handling background tasks
+        if (matchingAlarm && !supportsTriggers) {
+          fireImmediateNotification();
+        }
+      }
+    }, 30000); // Check every 30 seconds
 
-  useEffect(() => {
-    localStorage.setItem('funfactz_favs', JSON.stringify(favorites));
-  }, [favorites]);
+    return () => clearInterval(timer);
+  }, [settings.notifications, supportsTriggers]);
 
-  // SYSTEM ALARM SCHEDULING ENGINE
+  const fireImmediateNotification = async (factToUse?: FunFact) => {
+    if (Notification.permission !== 'granted') return;
+    
+    const reg = await navigator.serviceWorker.ready;
+    const filteredFacts = INITIAL_FACTS.filter(f => settings.selectedCategories.includes(f.category));
+    const factPool = filteredFacts.length > 0 ? filteredFacts : INITIAL_FACTS;
+    const randomFact = factToUse || factPool[Math.floor(Math.random() * factPool.length)];
+
+    // Fix: Added 'as any' to the options object to allow the 'vibrate' property which may be missing from standard NotificationOptions types
+    reg.showNotification(`FunFact: ${randomFact.category} 💡`, {
+      body: randomFact.fact,
+      tag: `funfact-instant-${Date.now()}`,
+      icon: 'https://ui-avatars.com/api/?name=F+F&background=10b981&color=fff&size=128',
+      data: { 
+        factId: randomFact.id,
+        url: `${window.location.origin}?mode=alarm&factId=${randomFact.id}`
+      },
+      requireInteraction: true,
+      vibrate: [200, 100, 200]
+    } as any);
+  };
+
+  // SYSTEM ALARM SCHEDULING ENGINE (The "WhatsApp" Background Flow)
   const syncSystemAlarms = useCallback(async (currentSettings: UserSettings) => {
-    if (!('serviceWorker' in navigator) || !('showTrigger' in Notification.prototype)) {
-      console.warn('Notification Triggers not supported in this browser.');
-      return;
-    }
-
+    if (!('serviceWorker' in navigator) || !supportsTriggers) return;
     if (Notification.permission !== 'granted') return;
 
     setIsScheduling(true);
     const reg = await navigator.serviceWorker.ready;
     
-    // Clear existing scheduled notifications to avoid duplicates/stale facts
+    // Clear old tags
     const existing = await reg.getNotifications();
     existing.forEach(n => {
-      // @ts-ignore: tag is standard
+      // @ts-ignore
       if (n.tag && n.tag.startsWith('funfact-alarm-')) n.close();
     });
 
@@ -109,30 +159,25 @@ const App: React.FC = () => {
     const filteredFacts = INITIAL_FACTS.filter(f => currentSettings.selectedCategories.includes(f.category));
     const factPool = filteredFacts.length > 0 ? filteredFacts : INITIAL_FACTS;
 
-    // Schedule for the next 7 days for each active alarm time
-    for (let day = 0; day < 7; day++) {
+    for (let day = 0; day < 3; day++) { // Reduced to 3 days to keep schedule lean
       for (const config of activeNotifications) {
         const [hours, minutes] = config.time.split(':').map(Number);
         const triggerDate = new Date();
         triggerDate.setDate(triggerDate.getDate() + day);
         triggerDate.setHours(hours, minutes, 0, 0);
 
-        // If time has already passed today, skip
         if (triggerDate.getTime() < Date.now()) continue;
 
-        // Select a fact (simple random for now, could be improved with 'seen' logic)
         const randomFact = factPool[Math.floor(Math.random() * factPool.length)];
 
         try {
-          // @ts-ignore: TimestampTrigger is experimental
+          // @ts-ignore
           const trigger = new TimestampTrigger(triggerDate.getTime());
-
-          await reg.showNotification(`${CATEGORY_ICONS[randomFact.category]} ${randomFact.category} Fact`, {
-            body: randomFact.fact.length > 60 ? randomFact.fact.substring(0, 57) + '...' : randomFact.fact,
+          await reg.showNotification(`FunFact: ${randomFact.category} 💡`, {
+            body: randomFact.fact,
             tag: `funfact-alarm-${config.id}-${day}`,
             icon: 'https://ui-avatars.com/api/?name=F+F&background=10b981&color=fff&size=128',
-            badge: 'https://ui-avatars.com/api/?name=FF&background=10b981&color=fff&size=96',
-            // @ts-ignore: experimental property
+            // @ts-ignore
             showTrigger: trigger,
             data: { 
               factId: randomFact.id,
@@ -142,19 +187,17 @@ const App: React.FC = () => {
             vibrate: [200, 100, 200]
           } as any);
         } catch (e) {
-          console.error('Failed to schedule notification', e);
+          console.error('Trigger fail', e);
         }
       }
     }
     setIsScheduling(false);
-  }, []);
+  }, [supportsTriggers, settings.selectedCategories]);
 
   useEffect(() => {
     localStorage.setItem('funfactz_settings', JSON.stringify(settings));
     document.documentElement.classList.toggle('dark', settings.darkMode);
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', settings.darkMode ? '#09090b' : '#10b981');
-    
-    // Resync alarms whenever settings change
     syncSystemAlarms(settings);
   }, [settings, syncSystemAlarms]);
 
@@ -173,16 +216,8 @@ const App: React.FC = () => {
   };
 
   const handleDismissAlarm = () => {
-    // Return to home state first
     setActiveTab('home');
     window.history.replaceState({}, '', '/');
-    
-    // In a PWA context launched from a notification, 'returning to previous app'
-    // often means closing the current window or just letting it stay in the background.
-    // window.close() only works if the tab was opened by script, but it's worth a try.
-    if (window.confirm("Close FunFactz and return?")) {
-      window.close();
-    }
   };
 
   const toggleFavorite = (fact: FunFact) => {
@@ -205,42 +240,45 @@ const App: React.FC = () => {
     setTimeout(() => setShowCopyToast(false), 2000);
   };
 
-  // ALARM UI (FULL SCREEN)
+  // FULL-SCREEN ALARM POP-UP UI
   if (activeTab === 'alarm' && alarmFact) {
     return (
-      <div className="fixed inset-0 z-[9999] bg-[#000] dark:bg-[#000] flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-500 overflow-hidden">
-        {/* Aesthetic Background Pulse */}
+      <div className="fixed inset-0 z-[10000] bg-[#000] flex flex-col items-center justify-between p-8 text-center animate-in fade-in zoom-in duration-500 overflow-hidden">
         <div className="absolute inset-0 overflow-hidden opacity-30 pointer-events-none">
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[140%] h-[140%] bg-emerald-500/10 rounded-full blur-[100px] animate-pulse" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-[120%] bg-emerald-500/10 rounded-full blur-[120px] animate-pulse" />
         </div>
 
-        <div className="relative z-10 w-full max-w-sm space-y-10">
-          <div className="flex flex-col items-center gap-4">
-            <div className="w-16 h-16 bg-emerald-500 rounded-2xl flex items-center justify-center shadow-2xl shadow-emerald-500/30">
-              <Sparkles size={32} className="text-white" />
+        <div className="relative z-10 w-full mt-16 space-y-12">
+          <div className="flex flex-col items-center gap-6">
+            <div className="w-20 h-20 bg-emerald-500 rounded-[32px] flex items-center justify-center shadow-3xl shadow-emerald-500/50">
+              <Sparkles size={40} className="text-white" />
             </div>
-            <h1 className="text-emerald-500 font-black uppercase tracking-[0.3em] text-[10px]">FunFactz Discovery</h1>
+            <div className="space-y-1">
+              <h1 className="text-emerald-500 font-black uppercase tracking-[0.4em] text-[10px]">Knowledge Arrival</h1>
+              <p className="text-zinc-500 text-[8px] font-black uppercase tracking-widest">Tapped from Notification</p>
+            </div>
           </div>
 
-          <div className="bg-white dark:bg-zinc-900 rounded-[40px] p-10 fact-card-shadow border border-white/10 relative overflow-hidden text-left">
-             <div className="absolute -top-6 -right-6 text-8xl opacity-5 pointer-events-none">
+          <div className="bg-white dark:bg-zinc-900 rounded-[48px] p-10 fact-card-shadow border border-white/5 relative overflow-hidden">
+             <div className="absolute -top-10 -right-10 text-[140px] opacity-5 pointer-events-none select-none">
                 {CATEGORY_ICONS[alarmFact.category]}
              </div>
-             
-             <div className="inline-block px-3 py-1 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 text-[10px] font-black rounded-full uppercase tracking-widest mb-6">
-                {CATEGORY_ICONS[alarmFact.category]} {alarmFact.category}
+             <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 text-[10px] font-black rounded-full uppercase tracking-widest mb-8">
+                <span>{CATEGORY_ICONS[alarmFact.category]}</span>
+                <span>{alarmFact.category} Fact</span>
              </div>
-             
-             <p className="text-2xl md:text-3xl font-bold leading-tight text-zinc-800 dark:text-zinc-50 italic">
+             <p className="text-3xl md:text-4xl font-black leading-tight text-zinc-800 dark:text-zinc-50 italic">
                 "{alarmFact.fact}"
              </p>
           </div>
+        </div>
 
+        <div className="relative z-10 w-full max-sm mb-12 space-y-6">
           <button 
             onClick={handleDismissAlarm}
-            className="w-full py-6 bg-emerald-500 hover:bg-emerald-400 text-white rounded-[24px] font-black uppercase tracking-[0.2em] shadow-xl active:scale-95 transition-all text-sm flex items-center justify-center gap-3"
+            className="w-full py-7 bg-white text-black rounded-[32px] font-black uppercase tracking-[0.2em] shadow-2xl active:scale-95 transition-all text-xl"
           >
-            Dismiss <X size={18} />
+            Got it!
           </button>
         </div>
       </div>
@@ -264,7 +302,7 @@ const App: React.FC = () => {
           </button>
           <div className="flex flex-col items-center">
             <h1 className="text-2xl font-black tracking-tighter text-emerald-500 uppercase italic leading-none">FunFactz</h1>
-            <span className="text-[8px] font-black uppercase tracking-[0.3em] text-zinc-400">Knowledge is Power</span>
+            <span className="text-[8px] font-black uppercase tracking-[0.3em] text-zinc-400">Discover Daily</span>
           </div>
           <button onClick={() => setActiveTab('settings')} className="w-12 h-12 bg-white dark:bg-zinc-800 rounded-2xl flex items-center justify-center shadow-sm border border-zinc-100 dark:border-zinc-700/50">
             <SettingsIcon size={22} className="text-zinc-500 dark:text-zinc-400" />
@@ -281,11 +319,14 @@ const App: React.FC = () => {
                   <Bell size={24} />
                 </div>
                 <div className="flex-1">
-                  <h4 className="text-xs font-black uppercase tracking-tight">Daily Alarms</h4>
-                  <p className="text-[10px] opacity-80 font-bold">Never miss a fact. Enable system notifications.</p>
+                  <h4 className="text-xs font-black uppercase tracking-tight">System Alarms</h4>
+                  <p className="text-[10px] opacity-80 font-bold">Pop-up notifications like WhatsApp.</p>
                 </div>
                 <button 
-                  onClick={() => Notification.requestPermission().then(setNotifPermission)}
+                  onClick={() => Notification.requestPermission().then(p => {
+                    setNotifPermission(p);
+                    if (p === 'granted') syncSystemAlarms(settings);
+                  })}
                   className="px-4 py-2.5 bg-white text-emerald-600 text-[10px] font-black uppercase rounded-xl active:scale-95 transition-all"
                 >
                   Enable
@@ -293,12 +334,12 @@ const App: React.FC = () => {
               </div>
             )}
 
-            <div className="w-full flex items-center justify-center min-h-[300px]">
+            <div className="w-full flex items-center justify-center min-h-[340px]">
               {!currentFact ? (
                 <div className="text-center p-14 bg-white dark:bg-zinc-900 rounded-[48px] border-2 border-dashed border-zinc-200 dark:border-zinc-800 w-full flex flex-col items-center">
                   <div className="text-7xl mb-8 animate-bounce-slow">💡</div>
-                  <h2 className="text-2xl font-black mb-3">Learn Today</h2>
-                  <p className="text-zinc-400 text-xs font-bold uppercase tracking-widest leading-relaxed">Tap below to discovery a new fact from our vault.</p>
+                  <h2 className="text-2xl font-black mb-3">Daily Wisdom</h2>
+                  <p className="text-zinc-400 text-xs font-bold uppercase tracking-widest leading-relaxed">Ready to find out something you didn't know? Tap below.</p>
                 </div>
               ) : (
                 <div className={`w-full bg-white dark:bg-zinc-800 rounded-[40px] p-8 fact-card-shadow border border-emerald-50 dark:border-emerald-900/20 relative ${isLoading ? 'opacity-50' : 'opacity-100'}`}>
@@ -313,11 +354,9 @@ const App: React.FC = () => {
                       <Heart size={22} fill={favorites.some(f => f.id === currentFact.id) ? "currentColor" : "none"} />
                     </button>
                   </div>
-                  
                   <p className="text-2xl md:text-3xl font-black leading-tight text-zinc-800 dark:text-zinc-50 mb-10 italic">
                     "{currentFact.fact}"
                   </p>
-
                   <div className="flex justify-between items-center pt-6 border-t border-zinc-100 dark:border-zinc-700/50">
                     <div className="flex gap-4">
                       <button onClick={() => shareFact(currentFact)} className="flex items-center gap-2 text-zinc-400 text-[10px] font-black uppercase tracking-widest hover:text-emerald-500">
@@ -412,20 +451,35 @@ const App: React.FC = () => {
                   </div>
                   <div className="space-y-0.5">
                     <p className="font-black text-sm uppercase tracking-tight">Alarm Engine</p>
-                    <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Local Scheduling</p>
+                    <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">System Health</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${isScheduling ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
-                  <span className="text-[9px] font-black uppercase text-zinc-400">{isScheduling ? 'Updating' : 'Active'}</span>
+                <div className="flex flex-col items-end gap-1">
+                   <div className="flex items-center gap-2">
+                     <div className={`w-2 h-2 rounded-full ${isScheduling ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
+                     <span className="text-[9px] font-black uppercase text-zinc-400">{isScheduling ? 'Syncing' : 'Live'}</span>
+                   </div>
+                   <span className={`text-[8px] font-bold uppercase tracking-widest ${supportsTriggers ? 'text-emerald-500' : 'text-amber-500'}`}>
+                     {supportsTriggers ? 'Trigger API Ready' : 'Foreground Mode Only'}
+                   </span>
                 </div>
               </div>
 
-              <div className="p-4 bg-zinc-50 dark:bg-zinc-900 rounded-3xl flex items-start gap-4">
-                <Info size={18} className="text-emerald-500 mt-0.5" />
-                <p className="text-[9px] text-zinc-500 font-bold leading-relaxed uppercase tracking-wider">
-                  Alarms work offline and even when the app is closed. Facts are pre-scheduled for the next 7 days.
-                </p>
+              <div className="p-4 bg-zinc-50 dark:bg-zinc-900 rounded-3xl space-y-3">
+                <div className="flex items-start gap-4">
+                  <Info size={18} className="text-emerald-500 mt-0.5 shrink-0" />
+                  <p className="text-[9px] text-zinc-500 font-bold leading-relaxed uppercase tracking-wider">
+                    {supportsTriggers 
+                      ? "Fully Optimized: Facts will pop up even if the app is closed." 
+                      : "Limited Support: Keep the app open or in your recent apps for alarms to fire reliably."}
+                  </p>
+                </div>
+                <button 
+                  onClick={() => fireImmediateNotification()}
+                  className="w-full py-3 bg-zinc-200 dark:bg-zinc-800 text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-zinc-300 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Zap size={14} /> Send Test Notification
+                </button>
               </div>
 
               <div className="flex items-center justify-between pt-4 border-t border-zinc-100 dark:border-zinc-700/50">
@@ -441,7 +495,7 @@ const App: React.FC = () => {
 
             <section className="space-y-6">
               <div className="flex items-center justify-between px-2">
-                <h3 className="text-xl font-black">Scheduled Times</h3>
+                <h3 className="text-xl font-black">Daily Alarms</h3>
                 <button 
                   onClick={() => setSettings(s => ({
                     ...s,
@@ -454,6 +508,12 @@ const App: React.FC = () => {
               </div>
 
               <div className="space-y-4">
+                {settings.notifications.length === 0 && (
+                  <div className="p-8 text-center bg-white dark:bg-zinc-800 rounded-[32px] border-2 border-dashed border-zinc-100 dark:border-zinc-700/50 opacity-50">
+                     <AlertCircle size={32} className="mx-auto mb-3" />
+                     <p className="text-[10px] font-black uppercase tracking-widest">No alarms set</p>
+                  </div>
+                )}
                 {settings.notifications.map((notif) => (
                   <div key={notif.id} className={`bg-white dark:bg-zinc-800 p-6 rounded-[32px] border flex items-center justify-between animate-in slide-in-from-bottom-2 ${notif.enabled ? 'border-emerald-100 dark:border-emerald-900/30' : 'border-zinc-100 opacity-50'}`}>
                     <div className="flex items-center gap-4">
@@ -495,9 +555,9 @@ const App: React.FC = () => {
 
       <nav className="fixed bottom-0 left-0 right-0 h-28 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-3xl border-t border-zinc-100 dark:border-zinc-800 px-10 flex justify-between items-center z-[100]">
         {[
-          { id: 'home', icon: Sparkles, label: 'Learn' },
+          { id: 'home', icon: Sparkles, label: 'Discover' },
           { id: 'categories', icon: LayoutGrid, label: 'Topics' },
-          { id: 'favorites', icon: Heart, label: 'Vault' },
+          { id: 'favorites', icon: Heart, label: 'Library' },
           { id: 'settings', icon: SettingsIcon, label: 'Setup' },
         ].map(({ id, icon: Icon, label }) => {
           const isActive = activeTab === id;
@@ -505,7 +565,7 @@ const App: React.FC = () => {
             <button
               key={id}
               onClick={() => setActiveTab(id as Screen)}
-              className={`flex flex-col items-center gap-2 transition-all duration-300 ${isActive ? 'text-emerald-500' : 'text-zinc-400'}`}
+              className={`flex flex-col items-center gap-2 transition-all duration-300 ${isActive ? 'text-emerald-500 scale-105' : 'text-zinc-400'}`}
             >
               <div className={`p-2.5 rounded-2xl ${isActive ? 'bg-emerald-50 dark:bg-emerald-900/20' : ''}`}>
                 <Icon size={isActive ? 24 : 22} />
